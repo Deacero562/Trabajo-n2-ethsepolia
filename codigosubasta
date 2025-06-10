@@ -6,21 +6,28 @@ pragma solidity >=0.8.2 <0.9.0;
 /// @notice Contrato inteligente para manejar subastas con requisitos de validez, depósitos, y reembolsos.
 
 contract Subasta {
+    // Mapeos de depósitos y última oferta
     mapping(address => uint256) public bidsList;
     mapping(address => uint256) public deposits;
 
+    // Parámetros de tiempo y ofertas
     uint256 public startTime;
+    uint256 public duration;
     uint256 public endTime;
+    uint256 public startingBid;
     uint256 public highestBid;
 
+    // Estado y seguridad
     bool public isActive;
     bool private locked;
     bool public isCancelled;
 
+    // Roles y participantes
     address public owner;
     address public highestBidder;
     address[] public bidders;
 
+    // Modificadores
     modifier onlyOwner() {
         require(msg.sender == owner, "No eres el propietario");
         _;
@@ -33,6 +40,8 @@ contract Subasta {
 
     modifier auctionActive() {
         require(isActive && !isCancelled, "Subasta no activa");
+        require(block.timestamp >= startTime, "Subasta aun no ha iniciado");
+        require(block.timestamp < endTime, "Subasta finalizada");
         _;
     }
 
@@ -48,30 +57,44 @@ contract Subasta {
         locked = false;
     }
 
+    // Eventos
     event NewBid(address indexed bidder, uint256 amount);
     event AuctionFinished(address indexed winner, uint256 amount);
     event AuctionCancelled();
     event DepositWithdrawn(address indexed bidder, uint256 amount);
 
-    constructor(uint256 duration) {
+    /// @notice Constructor: define inicio, duración y oferta mínima de la subasta.
+    /// @param _startTime Timestamp en que inicia la subasta.
+    /// @param _duration Duración en segundos desde startTime.
+    /// @param _startingBid Oferta mínima inicial en wei.
+    constructor(uint256 _startTime, uint256 _duration, uint256 _startingBid) {
+        require(_startTime >= block.timestamp, "Fecha de inicio invalida");
+        require(_duration > 0, "Duracion debe ser mayor a cero");
+        require(_startingBid > 0, "Oferta minima debe ser mayor a cero");
+
         owner = msg.sender;
+        startTime = _startTime;
+        duration = _duration;
+        endTime = startTime + duration;
+        startingBid = _startingBid;
+        highestBid = _startingBid;
         isActive = true;
-        startTime = block.timestamp;
-        endTime = block.timestamp + duration;
-        highestBid = 0;
     }
 
+    /// @notice Realiza una puja válida (>5% sobre mejor oferta) si la subasta está activa.
     function sendBid() external payable auctionActive noReentrancy noOwner {
-        require(block.timestamp < endTime, "Subasta finalizada");
         require(msg.value > highestBid * 105 / 100, "Oferta debe superar en 5% a la mejor");
 
+        // Devolver depósito del anterior mejor ofertante
         if (highestBidder != address(0)) {
             deposits[highestBidder] += highestBid;
         }
 
+        // Actualizar mejor oferta
         highestBid = msg.value;
         highestBidder = msg.sender;
 
+        // Registrar ofertante
         if (bidsList[msg.sender] == 0) {
             bidders.push(msg.sender);
         }
@@ -79,6 +102,7 @@ contract Subasta {
         bidsList[msg.sender] = msg.value;
         deposits[msg.sender] += msg.value;
 
+        // Extensión automática si faltan <10 minutos
         if (endTime <= block.timestamp + 10 minutes) {
             endTime = block.timestamp + 10 minutes;
         }
@@ -86,6 +110,7 @@ contract Subasta {
         emit NewBid(msg.sender, msg.value);
     }
 
+    /// @notice Permite retirar depósitos (excedentes o reembolsos).
     function withdrawDeposit() external noReentrancy {
         uint256 amount = deposits[msg.sender];
         require(amount > 0, "No tienes deposito para retirar");
@@ -94,44 +119,46 @@ contract Subasta {
         emit DepositWithdrawn(msg.sender, amount);
     }
 
+    /// @notice Finaliza la subasta si ha terminado el tiempo y emite evento.
     function finishAuction() external onlyOwner auctionActive noReentrancy {
         require(block.timestamp >= endTime, "Subasta aun activa");
         isActive = false;
         emit AuctionFinished(highestBidder, highestBid);
     }
 
+    /// @notice Cancela la subasta antes de cualquier puja.
     function cancelAuction() external onlyOwner auctionActive noReentrancy {
-        // Impide cancelar si ya hubo al menos una puja
         require(highestBidder == address(0), "No se puede cancelar tras la primera puja");
-
         isActive = false;
         isCancelled = true;
         emit AuctionCancelled();
     }
 
+    /// @notice Retira el saldo ganador al propietario, descontando depósitos pendientes.
     function withdrawBalance() external onlyOwner auctionFinished noReentrancy {
         require(!isCancelled, "Subasta cancelada");
         uint256 balance = address(this).balance;
-
         uint256 totalDeposits;
         for (uint256 i = 0; i < bidders.length; i++) {
             totalDeposits += deposits[bidders[i]];
         }
-
         uint256 toWithdraw = balance - totalDeposits;
         require(toWithdraw > 0, "No hay fondos para retirar");
         payable(owner).transfer(toWithdraw);
     }
 
+    /// @notice Devuelve el ganador después de finalizada.
     function getWinner() external view auctionFinished returns (address) {
         require(!isCancelled, "Subasta cancelada");
         return highestBidder;
     }
 
+    /// @notice Lista todos los ofertantes.
     function getBidders() external view returns (address[] memory) {
         return bidders;
     }
 
+    /// @notice Monto de la mejor oferta.
     function getHighestBid() external view returns (uint256) {
         return highestBid;
     }
