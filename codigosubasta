@@ -6,17 +6,19 @@ pragma solidity >=0.8.2 <0.9.0;
 /// @notice Contrato inteligente para manejar subastas con requisitos de validez, depósitos, y reembolsos.
 
 contract Subasta {
-    mapping(address => uint256) public bidsList;     // Última oferta válida de cada ofertante
-    mapping(address => uint256) public deposits;     // Depósitos disponibles para retirar (excedentes o reembolsos)
-    
+    // Mapeos de depósitos y última oferta
+    mapping(address => uint256) public bidsList;
+    mapping(address => uint256) public deposits;
+
+    // Tiempos y estado
     uint256 public startTime;
     uint256 public endTime;
     uint256 public highestBid;
-    
     bool public isActive;
-    bool private locked;      // Para reentrancy guard
+    bool private locked;      // Para protección reentrancia
     bool public isCancelled;
 
+    // Roles y participantes
     address public owner;
     address public highestBidder;
     address[] public bidders;
@@ -24,6 +26,11 @@ contract Subasta {
     // Modificadores
     modifier onlyOwner() {
         require(msg.sender == owner, "No eres el propietario");
+        _;
+    }
+
+    modifier noOwner() {
+        require(msg.sender != owner, "El propietario no puede ofertar");
         _;
     }
 
@@ -58,44 +65,29 @@ contract Subasta {
         highestBid = 0;
     }
 
-    function sendBid() external payable auctionActive noReentrancy {
+    /// @notice Permite a cualquier usuario (excepto el propietario) realizar una puja
+    function sendBid() external payable auctionActive noReentrancy noOwner {
         require(block.timestamp < endTime, "Subasta finalizada");
         require(msg.value > highestBid * 105 / 100, "Oferta debe superar en 5% a la mejor");
 
-        // Si el ofertante ya tiene una oferta previa, suma el nuevo pago a su depósito
-        uint256 totalDeposit = deposits[msg.sender] + msg.value;
-
-        // Calculamos cuanto necesita dejar como última oferta válida y cuanto queda como excedente
-        uint256 previousBid = bidsList[msg.sender];
-        require(totalDeposit >= previousBid + msg.value, "Saldo insuficiente");
-
-        // Actualizar depósitos: 
-        // El excedente es el total depositado menos la última oferta válida (msg.value + previousBid)
-        // Pero para evitar errores, simplemente actualizamos con totalDeposit y ajustamos después.
-        deposits[msg.sender] = totalDeposit;
-
-        // Se debe asegurar que la última oferta válida sea msg.value + previousBid, pero como solo permitimos ofertas mayores en 5% a la última mejor oferta global, 
-        // aquí asignamos la nueva oferta como msg.value y restamos anterior oferta para calcular excedente.
-        // Ajustamos la última oferta válida para que sea msg.value (la cantidad que aumenta la oferta) + previousBid (que ya estaba considerada)
-
-        // En este modelo, para simplificar y evitar doble conteo, solo guardaremos la última oferta válida:
-        bidsList[msg.sender] = msg.value;
-
-        // Si es nuevo ofertante, lo agregamos a la lista
-        if (previousBid == 0 && deposits[msg.sender] > 0) {
-            bidders.push(msg.sender);
-        }
-
-        // Reembolso del anterior mejor ofertante
-        if (highestBidder != address(0) && highestBidder != msg.sender) {
-            // Su oferta previa se convierte en depósito disponible para retiro
+        // Devolver la oferta anterior del ganador como depósito
+        if (highestBidder != address(0)) {
             deposits[highestBidder] += highestBid;
         }
 
         highestBid = msg.value;
         highestBidder = msg.sender;
 
-        // Extiende la subasta si quedan menos de 10 minutos
+        // Registrar al ofertante si es la primera vez
+        if (bidsList[msg.sender] == 0) {
+            bidders.push(msg.sender);
+        }
+
+        // Actualizar última oferta y saldo depositado
+        bidsList[msg.sender] = msg.value;
+        deposits[msg.sender] += msg.value;
+
+        // Extensión automática de la subasta
         if (endTime <= block.timestamp + 10 minutes) {
             endTime = block.timestamp + 10 minutes;
         }
@@ -103,7 +95,7 @@ contract Subasta {
         emit NewBid(msg.sender, msg.value);
     }
 
-    // Función para retirar depósitos (excedentes o reembolsos)
+    /// @notice Retira el exceso o reembolso acumulado
     function withdrawDeposit() external noReentrancy {
         uint256 amount = deposits[msg.sender];
         require(amount > 0, "No tienes deposito para retirar");
@@ -112,56 +104,48 @@ contract Subasta {
         emit DepositWithdrawn(msg.sender, amount);
     }
 
-    // Finaliza la subasta
+    /// @notice Finaliza la subasta y emite evento
     function finishAuction() external onlyOwner auctionActive noReentrancy {
         require(block.timestamp >= endTime, "Subasta aun activa");
-
         isActive = false;
-
-        // Emitimos evento de finalización
         emit AuctionFinished(highestBidder, highestBid);
     }
 
-    // Permite cancelar la subasta y devolver fondos
+    /// @notice Cancela la subasta y devuelve fondos a todos
     function cancelAuction() external onlyOwner auctionActive noReentrancy {
         isActive = false;
         isCancelled = true;
-
-        // Devolvemos los depósitos a todos los ofertantes
         for (uint256 i = 0; i < bidders.length; i++) {
-            address bidder = bidders[i];
-            uint256 amount = deposits[bidder];
-            if (amount > 0) {
-                deposits[bidder] = 0;
-                payable(bidder).transfer(amount);
-                emit DepositWithdrawn(bidder, amount);
+            address b = bidders[i];
+            uint256 amt = deposits[b];
+            if (amt > 0) {
+                deposits[b] = 0;
+                payable(b).transfer(amt);
+                emit DepositWithdrawn(b, amt);
             }
         }
-
         emit AuctionCancelled();
     }
 
-    // Permite al propietario retirar la oferta ganadora después de finalizar la subasta
+    /// @notice Permite al propietario retirar la oferta ganadora después de finalizada
     function withdrawBalance() external onlyOwner auctionFinished noReentrancy {
-        require(!isCancelled, "Subasta cancelada, no hay fondos para retirar");
+        require(!isCancelled, "Subasta cancelada");
         uint256 balance = address(this).balance;
 
-        // Debemos restar depósitos que todavía están pendientes de retiro (excedentes de otros ofertantes)
-        uint256 totalDeposits = 0;
+        // Restar los depósitos aún no retirados
+        uint256 totalDeposits;
         for (uint256 i = 0; i < bidders.length; i++) {
             totalDeposits += deposits[bidders[i]];
         }
 
-        uint256 amountToWithdraw = balance - totalDeposits;
-        require(amountToWithdraw > 0, "No hay fondos para retirar");
-
-        payable(owner).transfer(amountToWithdraw);
+        uint256 toWithdraw = balance - totalDeposits;
+        require(toWithdraw > 0, "No hay fondos para retirar");
+        payable(owner).transfer(toWithdraw);
     }
 
-    // Consultas útiles
-
+    /// @notice Consultas
     function getWinner() external view auctionFinished returns (address) {
-        require(!isCancelled, "Subasta cancelada, no hay ganador");
+        require(!isCancelled, "Subasta cancelada");
         return highestBidder;
     }
 
