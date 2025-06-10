@@ -108,6 +108,12 @@ Permite a los usuarios enviar directamente ETH al contrato para ser registrados 
     El propietario no puede participar como ofertante (modifier noEsPropietario).
 
     Se evita que un ofertante retire más de su depósito o por debajo de su mejor oferta.
+    
+    La dirección de pago no se puede cambiar después del despliegue.
+
+    Opcionalmente rechaza contratos como destino para evitar exploits.
+
+    Protegido contra envíos accidentales a address(0).
 
     Se restringen ciertas funciones a cuando la subasta está activa o finalizada detalladas a continuación:
 
