@@ -6,24 +6,21 @@ pragma solidity >=0.8.2 <0.9.0;
 /// @notice Contrato inteligente para manejar subastas con requisitos de validez, depósitos, y reembolsos.
 
 contract Subasta {
-    // Mapeos de depósitos y última oferta
     mapping(address => uint256) public bidsList;
     mapping(address => uint256) public deposits;
 
-    // Tiempos y estado
     uint256 public startTime;
     uint256 public endTime;
     uint256 public highestBid;
+
     bool public isActive;
-    bool private locked;      // Para protección reentrancia
+    bool private locked;
     bool public isCancelled;
 
-    // Roles y participantes
     address public owner;
     address public highestBidder;
     address[] public bidders;
 
-    // Modificadores
     modifier onlyOwner() {
         require(msg.sender == owner, "No eres el propietario");
         _;
@@ -51,7 +48,6 @@ contract Subasta {
         locked = false;
     }
 
-    // Eventos
     event NewBid(address indexed bidder, uint256 amount);
     event AuctionFinished(address indexed winner, uint256 amount);
     event AuctionCancelled();
@@ -65,12 +61,10 @@ contract Subasta {
         highestBid = 0;
     }
 
-    /// @notice Permite a cualquier usuario (excepto el propietario) realizar una puja
     function sendBid() external payable auctionActive noReentrancy noOwner {
         require(block.timestamp < endTime, "Subasta finalizada");
         require(msg.value > highestBid * 105 / 100, "Oferta debe superar en 5% a la mejor");
 
-        // Devolver la oferta anterior del ganador como depósito
         if (highestBidder != address(0)) {
             deposits[highestBidder] += highestBid;
         }
@@ -78,16 +72,13 @@ contract Subasta {
         highestBid = msg.value;
         highestBidder = msg.sender;
 
-        // Registrar al ofertante si es la primera vez
         if (bidsList[msg.sender] == 0) {
             bidders.push(msg.sender);
         }
 
-        // Actualizar última oferta y saldo depositado
         bidsList[msg.sender] = msg.value;
         deposits[msg.sender] += msg.value;
 
-        // Extensión automática de la subasta
         if (endTime <= block.timestamp + 10 minutes) {
             endTime = block.timestamp + 10 minutes;
         }
@@ -95,7 +86,6 @@ contract Subasta {
         emit NewBid(msg.sender, msg.value);
     }
 
-    /// @notice Retira el exceso o reembolso acumulado
     function withdrawDeposit() external noReentrancy {
         uint256 amount = deposits[msg.sender];
         require(amount > 0, "No tienes deposito para retirar");
@@ -104,35 +94,25 @@ contract Subasta {
         emit DepositWithdrawn(msg.sender, amount);
     }
 
-    /// @notice Finaliza la subasta y emite evento
     function finishAuction() external onlyOwner auctionActive noReentrancy {
         require(block.timestamp >= endTime, "Subasta aun activa");
         isActive = false;
         emit AuctionFinished(highestBidder, highestBid);
     }
 
-    /// @notice Cancela la subasta y devuelve fondos a todos
     function cancelAuction() external onlyOwner auctionActive noReentrancy {
+        // Impide cancelar si ya hubo al menos una puja
+        require(highestBidder == address(0), "No se puede cancelar tras la primera puja");
+
         isActive = false;
         isCancelled = true;
-        for (uint256 i = 0; i < bidders.length; i++) {
-            address b = bidders[i];
-            uint256 amt = deposits[b];
-            if (amt > 0) {
-                deposits[b] = 0;
-                payable(b).transfer(amt);
-                emit DepositWithdrawn(b, amt);
-            }
-        }
         emit AuctionCancelled();
     }
 
-    /// @notice Permite al propietario retirar la oferta ganadora después de finalizada
     function withdrawBalance() external onlyOwner auctionFinished noReentrancy {
         require(!isCancelled, "Subasta cancelada");
         uint256 balance = address(this).balance;
 
-        // Restar los depósitos aún no retirados
         uint256 totalDeposits;
         for (uint256 i = 0; i < bidders.length; i++) {
             totalDeposits += deposits[bidders[i]];
@@ -143,7 +123,6 @@ contract Subasta {
         payable(owner).transfer(toWithdraw);
     }
 
-    /// @notice Consultas
     function getWinner() external view auctionFinished returns (address) {
         require(!isCancelled, "Subasta cancelada");
         return highestBidder;
