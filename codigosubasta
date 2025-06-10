@@ -6,150 +6,96 @@ pragma solidity >=0.8.2 <0.9.0;
 /// @notice Contrato inteligente para manejar subastas con requisitos de validez, depósitos, y reembolsos.
 
 contract Subasta {
+    address public owner;
+    address public pagoDestino;
+    address public highestBidder;
+    uint public highestBid;
+    uint public auctionEndTime;
+    uint public commissionPercentage = 2;
+    bool public ended;
+
     struct Oferta {
-        address ofertante;
-        uint256 monto;
+        address oferente;
+        uint monto;
     }
 
-    address public propietario;
-    uint256 public precioInicial;
-    uint256 public plazoFinalOriginal;
-    uint256 public plazoActual;
-    Oferta public ofertaGanadora;
-    uint256 public constanteMinimaIncremento = 105; // 5% mínimo
-    uint256 public comision = 2; // 2% comisión
-    bool public subastaEstaActiva;
-    bool public fondosRetirados;
+    Oferta[] public ofertas;
+    mapping(address => uint) public deposits;
 
-    mapping(address => uint256) public depositos;
-    mapping(address => uint256) public ultimaOferta;
-    mapping(address => bool) public yaRetiraron;
-
-    address[] public todosLosOfertantes;
-    mapping(address => bool) public ofertanteRegistrado;
-
-    event NuevaOferta(address indexed ofertante, uint256 monto);
-    event SubastaFinalizada(address indexed ganador, uint256 monto);
-    event DepositoDevuelto(address indexed ofertante, uint256 monto);
-    event ReembolsoParcial(address indexed ofertante, uint256 monto);
+    event NuevaOferta(address indexed oferente, uint monto);
+    event SubastaFinalizada(address ganador, uint monto);
 
     modifier soloPropietario() {
-        require(msg.sender == propietario, "Acceso restringido al propietario");
+        require(msg.sender == owner, "Solo el propietario puede ejecutar esta funcion");
         _;
     }
 
-    modifier requiereSubastaActiva() {
-        require(subastaEstaActiva && block.timestamp < plazoActual, "La subasta no esta activa");
+    modifier subastaActiva() {
+        require(block.timestamp < auctionEndTime, "La subasta ha finalizado");
         _;
     }
 
-    modifier requiereSubastaFinalizada() {
-        require(!subastaEstaActiva, "La subasta aun esta activa");
-        _;
-    }
-
-    modifier ofertaValida(uint256 monto) {
-        require(monto >= siguienteOfertaMinima(), "Oferta debe superar al menos en 5% la actual");
-        _;
-    }
-
-    modifier noEsPropietario() {
-        require(msg.sender != propietario, "El propietario no puede ofertar");
-        _;
-    }
-
-    constructor(uint256 _precioInicial, uint256 _duracionSegundos) {
-        propietario = msg.sender;
-        precioInicial = _precioInicial;
-        plazoFinalOriginal = block.timestamp + _duracionSegundos;
-        plazoActual = plazoFinalOriginal;
-        ofertaGanadora = Oferta(address(0), _precioInicial);
-        subastaEstaActiva = true;
-    }
-
-    function ofertar(uint256 monto) external requiereSubastaActiva ofertaValida(monto) noEsPropietario {
-        require(depositos[msg.sender] >= monto, "Saldo de deposito insuficiente");
-
-        // Registrar nuevo ofertante una sola vez
-        if (!ofertanteRegistrado[msg.sender]) {
-            ofertanteRegistrado[msg.sender] = true;
-            todosLosOfertantes.push(msg.sender);
+    constructor(uint _duracion, uint _precioInicial, address _pagoDestino, bool evitarContratos) {
+        require(_pagoDestino != address(0), "Direccion invalida");
+        if (evitarContratos) {
+            require(!_esContrato(_pagoDestino), "No se permiten contratos como destino");
         }
 
-        depositos[msg.sender] -= monto;
-        ultimaOferta[msg.sender] = monto;
-        ofertaGanadora = Oferta(msg.sender, monto);
+        owner = msg.sender;
+        pagoDestino = _pagoDestino;
+        highestBid = _precioInicial;
+        auctionEndTime = block.timestamp + _duracion;
+    }
 
-        if (block.timestamp >= plazoFinalOriginal - 10 minutes) {
-            plazoActual = block.timestamp + 10 minutes;
+    function ofertar() external payable subastaActiva {
+        require(msg.value > highestBid * 105 / 100, "La oferta debe superar en al menos 5% la oferta actual");
+
+        if (highestBidder != address(0)) {
+            deposits[highestBidder] += highestBid;
         }
 
-        emit NuevaOferta(msg.sender, monto);
+        highestBidder = msg.sender;
+        highestBid = msg.value;
+        ofertas.push(Oferta(msg.sender, msg.value));
+
+        emit NuevaOferta(msg.sender, msg.value);
     }
 
-    function devolverDeposito() external requiereSubastaFinalizada {
-        require(msg.sender != ofertaGanadora.ofertante, "Ganador no puede retirar su deposito");
-        require(!yaRetiraron[msg.sender], "Deposito ya retirado");
-
-        uint256 deposito = depositos[msg.sender];
-        require(deposito > 0, "No hay fondos para retirar");
-
-        depositos[msg.sender] = 0;
-        yaRetiraron[msg.sender] = true;
-
-        uint256 reembolso = (deposito * (100 - comision)) / 100;
-        payable(msg.sender).transfer(reembolso);
-
-        emit DepositoDevuelto(msg.sender, reembolso);
+    function mostrarGanador() external view returns (address, uint) {
+        require(ended, "La subasta aun no ha finalizado");
+        return (highestBidder, highestBid);
     }
 
-    function retirarDepositoParcial(uint256 monto) external requiereSubastaActiva {
-        uint256 ofertaMaxima = ultimaOferta[msg.sender];
-        require(depositos[msg.sender] >= monto, "No tienes suficiente deposito");
-        require(depositos[msg.sender] - monto >= ofertaMaxima, "No puedes retirar por debajo de tu mejor oferta");
-
-        depositos[msg.sender] -= monto;
-        payable(msg.sender).transfer(monto);
-
-        emit ReembolsoParcial(msg.sender, monto);
+    function mostrarOfertas() external view returns (Oferta[] memory) {
+        return ofertas;
     }
 
     function finalizarSubasta() external soloPropietario {
-        require(subastaEstaActiva, "Subasta ya finalizada");
-        subastaEstaActiva = false;
+        require(block.timestamp >= auctionEndTime, "La subasta aun esta activa");
+        require(!ended, "La subasta ya ha finalizado");
 
-        emit SubastaFinalizada(ofertaGanadora.ofertante, ofertaGanadora.monto);
+        ended = true;
+        uint comision = highestBid * commissionPercentage / 100;
+        uint neto = highestBid - comision;
+
+        payable(pagoDestino).transfer(neto);
+
+        emit SubastaFinalizada(highestBidder, highestBid);
     }
 
-    function retirarFondosGanador() external soloPropietario requiereSubastaFinalizada {
-        require(!fondosRetirados, "Fondos ya retirados");
-        fondosRetirados = true;
+    function retirarDeposito() external {
+        uint monto = deposits[msg.sender];
+        require(monto > 0, "No hay fondos disponibles para retirar");
 
-        (bool success, ) = payable(propietario).call{value: ofertaGanadora.monto}("");
-        require(success, "Transferencia fallida");
+        deposits[msg.sender] = 0;
+        payable(msg.sender).transfer(monto);
     }
 
-    function mostrarGanador() external view returns (address, uint256) {
-        return (ofertaGanadora.ofertante, ofertaGanadora.monto);
-    }
-
-    function mostrarOfertas() external view returns (address[] memory, uint256[] memory) {
-        uint256 n = todosLosOfertantes.length;
-        address[] memory oferentes = new address[](n);
-        uint256[] memory montos = new uint256[](n);
-        for (uint256 i = 0; i < n; i++) {
-            address addr = todosLosOfertantes[i];
-            oferentes[i] = addr;
-            montos[i] = ultimaOferta[addr];
+    function _esContrato(address _addr) internal view returns (bool) {
+        uint size;
+        assembly {
+            size := extcodesize(_addr)
         }
-        return (oferentes, montos);
-    }
-
-    function siguienteOfertaMinima() public view returns (uint256) {
-        return (ofertaGanadora.monto * constanteMinimaIncremento) / 100;
-    }
-
-    receive() external payable {
-        depositos[msg.sender] += msg.value;
+        return size > 0;
     }
 }
