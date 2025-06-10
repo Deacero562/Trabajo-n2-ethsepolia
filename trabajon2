@@ -1,0 +1,155 @@
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity >=0.8.2 <0.9.0;
+
+/// @title Subasta descentralizada con reembolsos parciales y extensiones de tiempo.
+/// @author Sergio Gallo
+/// @notice Contrato inteligente para manejar subastas con requisitos de validez, depósitos, y reembolsos.
+
+contract Subasta {
+    struct Oferta {
+        address ofertante;
+        uint256 monto;
+    }
+
+    address public propietario;
+    uint256 public precioInicial;
+    uint256 public plazoFinalOriginal;
+    uint256 public plazoActual;
+    Oferta public ofertaGanadora;
+    uint256 public constanteMinimaIncremento = 105; // 5% mínimo
+    uint256 public comision = 2; // 2% comisión
+    bool public subastaEstaActiva;
+    bool public fondosRetirados;
+
+    mapping(address => uint256) public depositos;
+    mapping(address => uint256) public ultimaOferta;
+    mapping(address => bool) public yaRetiraron;
+
+    address[] public todosLosOfertantes;
+    mapping(address => bool) public ofertanteRegistrado;
+
+    event NuevaOferta(address indexed ofertante, uint256 monto);
+    event SubastaFinalizada(address indexed ganador, uint256 monto);
+    event DepositoDevuelto(address indexed ofertante, uint256 monto);
+    event ReembolsoParcial(address indexed ofertante, uint256 monto);
+
+    modifier soloPropietario() {
+        require(msg.sender == propietario, "Acceso restringido al propietario");
+        _;
+    }
+
+    modifier requiereSubastaActiva() {
+        require(subastaEstaActiva && block.timestamp < plazoActual, "La subasta no esta activa");
+        _;
+    }
+
+    modifier requiereSubastaFinalizada() {
+        require(!subastaEstaActiva, "La subasta aun esta activa");
+        _;
+    }
+
+    modifier ofertaValida(uint256 monto) {
+        require(monto >= siguienteOfertaMinima(), "Oferta debe superar al menos en 5% la actual");
+        _;
+    }
+
+    modifier noEsPropietario() {
+        require(msg.sender != propietario, "El propietario no puede ofertar");
+        _;
+    }
+
+    constructor(uint256 _precioInicial, uint256 _duracionSegundos) {
+        propietario = msg.sender;
+        precioInicial = _precioInicial;
+        plazoFinalOriginal = block.timestamp + _duracionSegundos;
+        plazoActual = plazoFinalOriginal;
+        ofertaGanadora = Oferta(address(0), _precioInicial);
+        subastaEstaActiva = true;
+    }
+
+    function ofertar(uint256 monto) external requiereSubastaActiva ofertaValida(monto) noEsPropietario {
+        require(depositos[msg.sender] >= monto, "Saldo de deposito insuficiente");
+
+        // Registrar nuevo ofertante una sola vez
+        if (!ofertanteRegistrado[msg.sender]) {
+            ofertanteRegistrado[msg.sender] = true;
+            todosLosOfertantes.push(msg.sender);
+        }
+
+        depositos[msg.sender] -= monto;
+        ultimaOferta[msg.sender] = monto;
+        ofertaGanadora = Oferta(msg.sender, monto);
+
+        if (block.timestamp >= plazoFinalOriginal - 10 minutes) {
+            plazoActual = block.timestamp + 10 minutes;
+        }
+
+        emit NuevaOferta(msg.sender, monto);
+    }
+
+    function devolverDeposito() external requiereSubastaFinalizada {
+        require(msg.sender != ofertaGanadora.ofertante, "Ganador no puede retirar su deposito");
+        require(!yaRetiraron[msg.sender], "Deposito ya retirado");
+
+        uint256 deposito = depositos[msg.sender];
+        require(deposito > 0, "No hay fondos para retirar");
+
+        depositos[msg.sender] = 0;
+        yaRetiraron[msg.sender] = true;
+
+        uint256 reembolso = (deposito * (100 - comision)) / 100;
+        payable(msg.sender).transfer(reembolso);
+
+        emit DepositoDevuelto(msg.sender, reembolso);
+    }
+
+    function retirarDepositoParcial(uint256 monto) external requiereSubastaActiva {
+        uint256 ofertaMaxima = ultimaOferta[msg.sender];
+        require(depositos[msg.sender] >= monto, "No tienes suficiente deposito");
+        require(depositos[msg.sender] - monto >= ofertaMaxima, "No puedes retirar por debajo de tu mejor oferta");
+
+        depositos[msg.sender] -= monto;
+        payable(msg.sender).transfer(monto);
+
+        emit ReembolsoParcial(msg.sender, monto);
+    }
+
+    function finalizarSubasta() external soloPropietario {
+        require(subastaEstaActiva, "Subasta ya finalizada");
+        subastaEstaActiva = false;
+
+        emit SubastaFinalizada(ofertaGanadora.ofertante, ofertaGanadora.monto);
+    }
+
+    function retirarFondosGanador() external soloPropietario requiereSubastaFinalizada {
+        require(!fondosRetirados, "Fondos ya retirados");
+        fondosRetirados = true;
+
+        (bool success, ) = payable(propietario).call{value: ofertaGanadora.monto}("");
+        require(success, "Transferencia fallida");
+    }
+
+    function mostrarGanador() external view returns (address, uint256) {
+        return (ofertaGanadora.ofertante, ofertaGanadora.monto);
+    }
+
+    function mostrarOfertas() external view returns (address[] memory, uint256[] memory) {
+        uint256 n = todosLosOfertantes.length;
+        address[] memory oferentes = new address[](n);
+        uint256[] memory montos = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) {
+            address addr = todosLosOfertantes[i];
+            oferentes[i] = addr;
+            montos[i] = ultimaOferta[addr];
+        }
+        return (oferentes, montos);
+    }
+
+    function siguienteOfertaMinima() public view returns (uint256) {
+        return (ofertaGanadora.monto * constanteMinimaIncremento) / 100;
+    }
+
+    receive() external payable {
+        depositos[msg.sender] += msg.value;
+    }
+}
