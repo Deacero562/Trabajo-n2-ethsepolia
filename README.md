@@ -97,7 +97,7 @@ Solo el owner puede finalizar, cancelar o retirar fondos.
 
 Validaciones estrictas en fechas, valores y estados.
 
-🧪 Pruebas Sugeridas
+🧪 Otras características
 
 Oferta válida (supera 5%) y rechazo si no lo hace.
 
