@@ -1,32 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity >=0.5.8 <0.9.0;
+pragma solidity >=0.8.2 <0.9.0;
 
-/// @title Subasta descentralizada con reembolsos parciales y extensiones de tiempo.
+/// @title Subasta descentralizada con reembolsos parciales, comisión y extensiones de tiempo.
 /// @author Sergio Gallo
 /// @notice Contrato inteligente para manejar subastas con requisitos de validez, depósitos, y reembolsos.
 
 contract Subasta {
-    // Mapeos de depósitos y última oferta
-    mapping(address => uint256) public bidsList;
-    mapping(address => uint256) public deposits;
+    mapping(address => uint256) public bidsList;       // Última oferta de cada usuario
+    mapping(address => uint256) public deposits;       // Depósitos acumulados para retirar
+    mapping(address => bool) public isBidder;          // Control para no duplicar en bidders
 
-    // Parámetros de tiempo y ofertas
     uint256 public duration;
     uint256 public endTime;
     uint256 public startingBid;
     uint256 public highestBid;
 
-    // Estado y seguridad
     bool public isActive;
     bool private locked;
     bool public isCancelled;
 
-    // Roles y participantes
     address public owner;
     address public highestBidder;
     address[] public bidders;
 
-    // Modificadores
     modifier onlyOwner() {
         require(msg.sender == owner, "No eres el propietario");
         _;
@@ -55,15 +51,11 @@ contract Subasta {
         locked = false;
     }
 
-    // Eventos
     event NewBid(address indexed bidder, uint256 amount);
     event AuctionFinished(address indexed winner, uint256 amount);
     event AuctionCancelled();
     event DepositWithdrawn(address indexed bidder, uint256 amount);
 
-    /// @notice Constructor: define duración y oferta mínima de la subasta.
-    /// @param _duration Duración en segundos desde el despliegue.
-    /// @param _startingBid Oferta mínima inicial en wei.
     constructor(uint256 _duration, uint256 _startingBid) {
         require(_duration > 0, "Duracion debe ser mayor a cero");
         require(_startingBid > 0, "Oferta minima debe ser mayor a cero");
@@ -76,7 +68,6 @@ contract Subasta {
         isActive = true;
     }
 
-    /// @notice Realiza una puja válida (>5% sobre mejor oferta) si la subasta está activa.
     function sendBid() external payable auctionActive noReentrancy noOwner {
         require(msg.value > highestBid * 105 / 100, "Oferta debe superar en 5% a la mejor");
 
@@ -89,9 +80,10 @@ contract Subasta {
         highestBid = msg.value;
         highestBidder = msg.sender;
 
-        // Registrar ofertante
-        if (bidsList[msg.sender] == 0) {
+        // Registrar ofertante sin duplicados
+        if (!isBidder[msg.sender]) {
             bidders.push(msg.sender);
+            isBidder[msg.sender] = true;
         }
 
         bidsList[msg.sender] = msg.value;
@@ -105,23 +97,26 @@ contract Subasta {
         emit NewBid(msg.sender, msg.value);
     }
 
-    /// @notice Permite retirar depósitos (excedentes o reembolsos).
     function withdrawDeposit() external noReentrancy {
         uint256 amount = deposits[msg.sender];
         require(amount > 0, "No tienes deposito para retirar");
+
+        // Aplicar comisión del 2%
+        uint256 commission = (amount * 2) / 100;
+        uint256 payout = amount - commission;
+
         deposits[msg.sender] = 0;
-        payable(msg.sender).transfer(amount);
-        emit DepositWithdrawn(msg.sender, amount);
+        payable(msg.sender).transfer(payout);
+
+        emit DepositWithdrawn(msg.sender, payout);
     }
 
-    /// @notice Finaliza la subasta si ha terminado el tiempo y emite evento.
     function finishAuction() external onlyOwner auctionActive noReentrancy {
         require(block.timestamp >= endTime, "Subasta aun activa");
         isActive = false;
         emit AuctionFinished(highestBidder, highestBid);
     }
 
-    /// @notice Cancela la subasta antes de cualquier puja.
     function cancelAuction() external onlyOwner auctionActive noReentrancy {
         require(highestBidder == address(0), "No se puede cancelar tras la primera puja");
         isActive = false;
@@ -129,7 +124,6 @@ contract Subasta {
         emit AuctionCancelled();
     }
 
-    /// @notice Retira el saldo ganador al propietario, descontando depósitos pendientes.
     function withdrawBalance() external onlyOwner auctionFinished noReentrancy {
         require(!isCancelled, "Subasta cancelada");
         uint256 balance = address(this).balance;
@@ -142,19 +136,16 @@ contract Subasta {
         payable(owner).transfer(toWithdraw);
     }
 
-    /// @notice Devuelve el ganador después de finalizada.
-    function getWinner() external view auctionFinished returns (address) {
+    function getWinner() external view auctionFinished returns (address, uint256) {
         require(!isCancelled, "Subasta cancelada");
-        return highestBidder;
+        return (highestBidder, highestBid);
     }
 
-    /// @notice Lista todos los ofertantes.
     function getBidders() external view returns (address[] memory) {
         return bidders;
     }
 
-    /// @notice Monto de la mejor oferta.
     function getHighestBid() external view returns (uint256) {
         return highestBid;
     }
-} 
+}
