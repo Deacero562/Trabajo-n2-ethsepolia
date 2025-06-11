@@ -1,155 +1,108 @@
-# Contrato Inteligente: Subasta
+⚙️ Funcionalidades
 
-Este contrato implementa una subasta descentralizada con los siguientes mecanismos:
+🔧 Constructor
 
-- **Extensión automática del plazo** si se realizan ofertas cerca del cierre.
-- **Reembolso parcial de depósitos** para ofertantes no ganadores.
-- **Comisión sobre depósitos devueltos**.
-- **Restricción para que el propietario no pueda ofertar**.
+Inicializa:
 
----
+Hora de inicio
 
-## 📦 Variables Principales
+Duración (segundos)
 
-- `propietario`: Dirección del creador del contrato. Tiene permisos especiales (como finalizar la subasta).
-- `precioInicial`: Precio mínimo de inicio para la subasta.
-- `plazoFinalOriginal`: Tiempo límite inicial de la subasta.
-- `plazoActual`: Tiempo límite actualizado (si hubo extensión).
-- `subastaEstaActiva`: Indica si la subasta está en curso.
-- `fondosRetirados`: Marca si el propietario ya retiró los fondos.
-- `constanteMinimaIncremento`: Incremento mínimo (105 = +5%) requerido sobre la oferta ganadora actual.
-- `comision`: Porcentaje de comisión aplicado al reembolso del depósito.
-- `ofertaGanadora`: Oferta más alta actual (estructura con dirección y monto).
+Oferta mínima inicial
 
-### Mappings
+constructor(uint256 _startTime, uint256 _duration, uint256 _startingBid)
 
-- `depositos`: Monto que cada dirección ha depositado.
-- `ultimaOferta`: Última oferta válida realizada por cada dirección.
-- `yaRetiraron`: Marca si un ofertante ya retiró su depósito.
-- `ofertanteRegistrado`: Para evitar duplicar entradas en la lista de ofertantes.
-- `todosLosOfertantes`: Arreglo con todas las direcciones que realizaron al menos una oferta.
+🏷️ Función para ofertar
 
----
+Realiza una oferta válida si:
 
-## ⚙️ Funciones Públicas
+Supera en al menos 5% la actual mejor oferta.
 
-### Constructor
-```solidity
-constructor(uint256 _precioInicial, uint256 _duracionSegundos)
+La subasta está activa.
 
-Inicializa la subasta con precio base y duración determinada en segundos.
-ofertar
+function sendBid() external payable
 
-function ofertar(uint256 monto) external
+Registra el historial de ofertas y extiende la subasta 10 minutos si queda poco tiempo.
 
-Permite ofertar si:
+💰 Manejo de depósitos
 
-    La subasta está activa.
+Las ofertas se almacenan en:
 
-    Se cumple el incremento mínimo (5%).
+mapping(address => uint256) public deposits;
 
-    El ofertante no es el propietario.
+Asociado a cada dirección oferente.
 
-    Tiene depósito suficiente.
+💸 Devolver depósitos
 
-Extiende el tiempo si la oferta se realiza en los últimos 10 minutos.
-devolverDeposito
+Durante la subasta: permite retirar el exceso de una oferta anterior (reembolso parcial).
 
-function devolverDeposito() external
+Después de la subasta: permite retirar todo el depósito (menos comisión).
 
-Permite a los ofertantes no ganadores retirar sus depósitos (menos comisión). Solo una vez.
-retirarDepositoParcial
+function withdrawDeposit() external
 
-function retirarDepositoParcial(uint256 monto) external
+Se aplica comisión del 2% sobre el monto devuelto.
 
-Permite retirar una parte del depósito siempre que no quede por debajo de la oferta máxima realizada.
-finalizarSubasta
+🥇 Mostrar ganador
 
-function finalizarSubasta() external
+Devuelve el oferente con la oferta más alta.
 
-Solo el propietario puede ejecutarla. Marca la subasta como finalizada.
-retirarFondosGanador
+function getWinner() external view returns (address)
 
-function retirarFondosGanador() external
+📜 Mostrar ofertas
 
-Permite al propietario retirar el monto de la oferta ganadora una vez finalizada la subasta.
-mostrarGanador
+Lista de todos los oferentes:
 
-function mostrarGanador() external view returns (address, uint256)
+function getBidders() external view returns (address[] memory)
 
-Devuelve la dirección y monto de la oferta ganadora.
-mostrarOfertas
+Monto de la mejor oferta:
 
-function mostrarOfertas() external view returns (address[] memory, uint256[] memory)
+function getHighestBid() external view returns (uint256)
 
-Devuelve un arreglo de todos los ofertantes y sus respectivas ofertas.
-siguienteOfertaMinima
+Historial de pujas por usuario:
 
-function siguienteOfertaMinima() public view returns (uint256)
+function getBidHistory(address user) external view returns (uint256[] memory)
 
-Calcula la siguiente oferta válida mínima (+5% de la actual ganadora).
-receive
+❌ Cancelar Subasta
 
-receive() external payable
+Solo si aún no hay ofertas:
 
-Permite a los usuarios enviar directamente ETH al contrato para ser registrados como depósitos.
-📢 Eventos
+function cancelAuction() external onlyOwner
 
-    NuevaOferta(address ofertante, uint256 monto): Emitido cada vez que se recibe una oferta válida.
+🏁 Finalizar Subasta
 
-    SubastaFinalizada(address ganador, uint256 monto): Emitido al finalizar la subasta.
+Marca la subasta como finalizada y emite evento:
 
-    DepositoDevuelto(address ofertante, uint256 monto): Emitido al devolver depósitos luego de finalizada la subasta.
+function finishAuction() external onlyOwner
 
-    ReembolsoParcial(address ofertante, uint256 monto): Emitido al hacer una extracción parcial del depósito durante la subasta.
+📤 Retirar Fondos
 
-🔒 Seguridad
+Solo el owner puede retirar el saldo final:
 
-    El propietario no puede participar como ofertante (modifier noEsPropietario).
+function withdrawBalance() external onlyOwner
 
-    Se evita que un ofertante retire más de su depósito o por debajo de su mejor oferta.
-    
-    Se restringen ciertas funciones a cuando la subasta está activa o finalizada detalladas a continuación:
+Descuenta depósitos pendientes de devolución.
 
-Restricciones por Estado de la Subasta
+📢 Eventos Emitidos
 
-Algunas funciones solo pueden ejecutarse cuando la subasta está en un estado específico. Esto se controla mediante modificadores personalizados:
-📌 Funciones limitadas a cuando la subasta está activa
+event NewBid(address indexed bidder, uint256 amount);
+event AuctionFinished(address indexed winner, uint256 amount);
+event AuctionCancelled();
+event DepositWithdrawn(address indexed bidder, uint256 amount);
 
-Estas funciones usan el modificador requiereSubastaActiva, que impone la condición:
+🔐 Seguridad y Recomendaciones
 
-require(subastaEstaActiva && block.timestamp < plazoActual, "La subasta no esta activa");
+Uso de noReentrancy para proteger funciones sensibles.
 
-Esto significa que la subasta:
+Solo el owner puede finalizar, cancelar o retirar fondos.
 
-    Debe estar activa (subastaEstaActiva == true)
+Validaciones estrictas en fechas, valores y estados.
 
-    Y no debe haber alcanzado el plazo límite (block.timestamp < plazoActual)
+🧪 Pruebas Sugeridas
 
-🔒 Funciones restringidas:
+Oferta válida (supera 5%) y rechazo si no lo hace.
 
-    ofertar(uint256 monto)
-    → Solo se puede ofertar durante el tiempo válido de la subasta.
+Reembolso parcial durante subasta.
 
-    retirarDepositoParcial(uint256 monto)
-    → Solo se pueden hacer extracciones parciales mientras la subasta está en curso.
+Reembolso con comisión después de finalizada.
 
-📌 Funciones limitadas a cuando la subasta está finalizada
-
-Estas funciones usan el modificador requiereSubastaFinalizada, que impone la condición:
-
-require(!subastaEstaActiva, "La subasta aun esta activa");
-
-Es decir, solo se ejecutan una vez finalizada la subasta.
-🔒 Funciones restringidas:
-
-    devolverDeposito()
-    → Permite retirar el depósito (con comisión) solo a ofertantes que no ganaron.
-
-    retirarFondosGanador()
-    → El propietario solo puede retirar los fondos del ganador cuando la subasta haya terminado.
-
-🛑 Función que cambia el estado de la subasta:
-
-    finalizarSubasta()
-    → Solo el propietario puede ejecutar esta función. Cambia subastaEstaActiva a false, marcando el fin de la subasta.
+Protección contra duplicados en lista de oferentes.
