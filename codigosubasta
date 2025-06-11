@@ -9,6 +9,8 @@ contract Subasta {
     mapping(address => uint256) public bidsList;       // Última oferta de cada usuario
     mapping(address => uint256) public deposits;       // Depósitos acumulados para retirar
     mapping(address => bool) public isBidder;          // Control para no duplicar en bidders
+    mapping(address => uint256[]) public bidHistory;   // Historial de ofertas por usuario
+    mapping(address => uint256) public reimbursed;     // Monto ya reembolsado por usuario
 
     uint256 public duration;
     uint256 public endTime;
@@ -55,6 +57,7 @@ contract Subasta {
     event AuctionFinished(address indexed winner, uint256 amount);
     event AuctionCancelled();
     event DepositWithdrawn(address indexed bidder, uint256 amount);
+    event PartialRefund(address indexed bidder, uint256 amount);
 
     constructor(uint256 _duration, uint256 _startingBid) {
         require(_duration > 0, "Duracion debe ser mayor a cero");
@@ -76,15 +79,18 @@ contract Subasta {
             deposits[highestBidder] += highestBid;
         }
 
-        // Actualizar mejor oferta
-        highestBid = msg.value;
-        highestBidder = msg.sender;
-
         // Registrar ofertante sin duplicados
         if (!isBidder[msg.sender]) {
             bidders.push(msg.sender);
             isBidder[msg.sender] = true;
         }
+
+        // Guardar historial de pujas
+        bidHistory[msg.sender].push(msg.value);
+
+        // Actualizar mejor oferta
+        highestBid = msg.value;
+        highestBidder = msg.sender;
 
         bidsList[msg.sender] = msg.value;
         deposits[msg.sender] += msg.value;
@@ -95,6 +101,31 @@ contract Subasta {
         }
 
         emit NewBid(msg.sender, msg.value);
+    }
+
+    /// @notice Permite al usuario retirar ofertas anteriores a su última oferta activa
+    function withdrawPreviousBids() external noReentrancy {
+        uint256[] storage history = bidHistory[msg.sender];
+        require(history.length > 1, "No hay reembolsos parciales disponibles");
+
+        uint256 total;
+        for (uint256 i = 0; i < history.length - 1; i++) {
+            total += history[i];
+        }
+
+        require(total > reimbursed[msg.sender], "Ya retiraste tus ofertas anteriores");
+
+        uint256 refundable = total - reimbursed[msg.sender];
+        reimbursed[msg.sender] += refundable;
+
+        // Aplicar comisión del 2%
+        uint256 commission = (refundable * 2) / 100;
+        uint256 payout = refundable - commission;
+
+        deposits[msg.sender] -= refundable; // reducir del total depositado
+        payable(msg.sender).transfer(payout);
+
+        emit PartialRefund(msg.sender, payout);
     }
 
     function withdrawDeposit() external noReentrancy {
