@@ -4,8 +4,6 @@
 
 Inicializa:
 
-Hora de inicio
-
 Duración (segundos)
 
 Oferta mínima inicial
