@@ -54,6 +54,15 @@ Inicializa la subasta.
 
 ---
 
+🧠 Consideración sobre el Historial de Ofertas
+
+El contrato guarda el historial completo de ofertas de cada usuario en la variable bidHistory para permitir la funcionalidad avanzada de reembolsos parciales. Esto significa que un ofertante puede retirar las cantidades de sus ofertas anteriores que ya fueron superadas por nuevas pujas suyas, sin afectar su última oferta activa.
+
+Guardar este historial completo es necesario para calcular correctamente cuánto se puede reembolsar en cada retiro parcial, ya que no basta con conocer solo la oferta más alta, sino todas las ofertas previas realizadas por el usuario.
+
+
+---
+
 ### `sendBid() external payable`
 Permite realizar una oferta válida.  
 - Debe superar la mejor oferta por al menos 5%.  
