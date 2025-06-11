@@ -1,106 +1,108 @@
-⚙️ Funcionalidades
+# 🧾 Contrato de Subasta Descentralizada
 
-🔧 Constructor
+Este contrato implementa una subasta descentralizada en Solidity con lógica de depósitos, reembolsos parciales, extensión automática de tiempo y control de validez de ofertas. Es parte del trabajo final del **Módulo 2**.
 
-Inicializa:
+## 🚀 Funcionalidades Principales
 
-Duración (segundos)
+- **Inicio de Subasta:** el constructor inicializa la duración y la oferta mínima.
+- **Ofertas Válidas:** una oferta es válida si supera la oferta más alta por al menos un 5%.
+- **Reembolsos Parciales:** se devuelven automáticamente los fondos de la oferta anterior al nuevo ofertante líder.
+- **Extensión del Tiempo:** si una oferta válida se realiza dentro de los últimos 10 minutos, la subasta se extiende 10 minutos más.
+- **Depósitos Asociados:** cada oferta queda registrada como depósito a nombre del oferente.
+- **Retiros de Fondos:** al finalizar la subasta, los oferentes no ganadores pueden retirar sus depósitos.
+- **Cancelación de Subasta:** el propietario puede cancelarla solo si no hubo ofertas.
 
-Oferta mínima inicial
+## ⚙️ Variables
 
-constructor(uint256 _startTime, uint256 _duration, uint256 _startingBid)
+| Nombre | Tipo | Descripción |
+|-------|------|-------------|
+| `bidsList` | `mapping(address => uint256)` | Última oferta registrada por cada usuario. |
+| `deposits` | `mapping(address => uint256)` | Fondos disponibles para retiro por cada usuario. |
+| `duration` | `uint256` | Duración en segundos de la subasta. |
+| `endTime` | `uint256` | Timestamp de finalización de la subasta. |
+| `startingBid` | `uint256` | Monto mínimo de puja. |
+| `highestBid` | `uint256` | Monto actual más alto ofertado. |
+| `isActive` | `bool` | Indica si la subasta está activa. |
+| `isCancelled` | `bool` | Indica si la subasta fue cancelada. |
+| `locked` | `bool` | Protección contra ataques de reentrancia. |
+| `owner` | `address` | Dirección del propietario (quien despliega el contrato). |
+| `highestBidder` | `address` | Dirección del ofertante con la oferta más alta. |
+| `bidders` | `address[]` | Lista de todos los participantes que ofertaron. |
 
-🏷️ Función para ofertar
+## 🧠 Modificadores
 
-Realiza una oferta válida si:
+- `onlyOwner`: solo el propietario puede ejecutar.
+- `noOwner`: impide que el propietario haga ofertas.
+- `auctionActive`: solo permite funciones mientras la subasta está activa.
+- `auctionFinished`: solo permite funciones cuando ha terminado.
+- `noReentrancy`: evita ataques de reentrancia en funciones con `transfer`.
 
-Supera en al menos 5% la actual mejor oferta.
+## 🔧 Funciones
 
-La subasta está activa.
+### `constructor(uint256 _duration, uint256 _startingBid)`
+Inicializa la subasta.  
+- `_duration`: duración en segundos desde el momento del despliegue.  
+- `_startingBid`: valor mínimo de puja (en wei).
 
-function sendBid() external payable
+---
 
-Registra el historial de ofertas y extiende la subasta 10 minutos si queda poco tiempo.
+### `sendBid() external payable`
+Permite realizar una oferta válida.  
+- Requiere superar en al menos 5% la mejor oferta.
+- Extiende el tiempo si quedan menos de 10 minutos.
+- Reembolsa automáticamente al ofertante anterior.
 
-💰 Manejo de depósitos
+---
 
-Las ofertas se almacenan en:
+### `withdrawDeposit() external`
+Permite al usuario retirar su depósito si no ganó.  
+- Solo puede ejecutarse si el depósito es mayor a cero.
 
-mapping(address => uint256) public deposits;
+---
 
-Asociado a cada dirección oferente.
+### `finishAuction() external onlyOwner`
+Finaliza la subasta cuando el tiempo ha terminado.  
+- Emite el evento `AuctionFinished`.
 
-💸 Devolver depósitos
+---
 
-Durante la subasta: permite retirar el exceso de una oferta anterior (reembolso parcial).
+### `cancelAuction() external onlyOwner`
+Cancela la subasta si aún no hay ofertas.
 
-Después de la subasta: permite retirar todo el depósito (menos comisión).
+---
 
-function withdrawDeposit() external
+### `withdrawBalance() external onlyOwner`
+Permite al propietario retirar el saldo acumulado (sin incluir los depósitos aún no retirados).
 
-Se aplica comisión del 2% sobre el monto devuelto.
+---
 
-🥇 Mostrar ganador
+### `getWinner() external view returns (address)`
+Devuelve la dirección del ganador si la subasta ya finalizó.
 
-Devuelve el oferente con la oferta más alta.
+---
 
-function getWinner() external view returns (address)
+### `getBidders() external view returns (address[] memory)`
+Devuelve una lista de todos los ofertantes.
 
-📜 Mostrar ofertas
+---
 
-Lista de todos los oferentes:
+### `getHighestBid() external view returns (uint256)`
+Devuelve el valor de la mejor oferta actual.
 
-function getBidders() external view returns (address[] memory)
+---
 
-Monto de la mejor oferta:
+## 📢 Eventos
 
-function getHighestBid() external view returns (uint256)
+| Evento | Descripción |
+|--------|-------------|
+| `NewBid(address bidder, uint256 amount)` | Se emite cuando se realiza una nueva oferta. |
+| `AuctionFinished(address winner, uint256 amount)` | Se emite al finalizar la subasta. |
+| `AuctionCancelled()` | Se emite si el propietario cancela la subasta. |
+| `DepositWithdrawn(address bidder, uint256 amount)` | Se emite al retirar un depósito. |
 
-Historial de pujas por usuario:
+---
 
-function getBidHistory(address user) external view returns (uint256[] memory)
+## 🧪 Ejemplo de Parámetros para Deploy
 
-❌ Cancelar Subasta
-
-Solo si aún no hay ofertas:
-
-function cancelAuction() external onlyOwner
-
-🏁 Finalizar Subasta
-
-Marca la subasta como finalizada y emite evento:
-
-function finishAuction() external onlyOwner
-
-📤 Retirar Fondos
-
-Solo el owner puede retirar el saldo final:
-
-function withdrawBalance() external onlyOwner
-
-Descuenta depósitos pendientes de devolución.
-
-📢 Eventos Emitidos
-
-event NewBid(address indexed bidder, uint256 amount);
-event AuctionFinished(address indexed winner, uint256 amount);
-event AuctionCancelled();
-event DepositWithdrawn(address indexed bidder, uint256 amount);
-
-🔐 Seguridad y Recomendaciones
-
-Uso de noReentrancy para proteger funciones sensibles.
-
-Solo el owner puede finalizar, cancelar o retirar fondos.
-
-Validaciones estrictas en fechas, valores y estados.
-
-🧪 Otras características
-
-Oferta válida (supera 5%) y rechazo si no lo hace.
-
-Reembolso parcial durante subasta.
-
-Reembolso con comisión después de finalizada.
-
-Protección contra duplicados en lista de oferentes.
+- Duración: `600` (10 minutos)
+- Oferta mínima: `10000000000000000` (0.01 ETH)
